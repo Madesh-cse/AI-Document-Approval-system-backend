@@ -1,0 +1,103 @@
+# ================================
+# Python
+# ================================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Python virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# ================================
+# Environment Variables / Secrets
+# ================================
+.env
+.env.*
+!.env.example
+
+# ================================
+# FastAPI / Uvicorn
+# ================================
+*.log
+
+# ================================
+# Testing / Coverage
+# ================================
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# ================================
+# Type Checking / Linters
+# ================================
+.mypy_cache/
+.pyright/
+.ruff_cache/
+
+# ================================
+# Build / Distribution
+# ================================
+build/
+dist/
+*.egg-info/
+
+# ================================
+# Database / Local Files
+# ================================
+*.db
+*.sqlite
+*.sqlite3
+
+# ================================
+# AI / ML Cache
+# ================================
+.chroma/
+chroma_db/
+.chromadb/
+
+# Model / embedding caches
+.cache/
+huggingface_cache/
+transformers_cache/
+
+# ================================
+# Uploaded Documents
+# ================================
+uploads/
+storage/
+temp/
+tmp/
+
+# Documents generated locally
+*.pdf
+*.docx
+*.xlsx
+*.csv
+
+# ================================
+# IDE
+# ================================
+.vscode/
+.idea/
+
+# ================================
+# OS
+# ================================
+.DS_Store
+Thumbs.db
+
+# ================================
+# Jupyter
+# ================================
+.ipynb_checkpoints/
+
+# ================================
+# Docker
+# ================================
+docker-compose.override.yml
