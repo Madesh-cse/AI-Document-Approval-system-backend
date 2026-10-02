@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_user
 from app.db.session import get_db
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.models.documents import DocumentStatus
 from app.schemas.document import (
     DocumentListResponse,
@@ -276,5 +276,86 @@ def get_document(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Document not found.",
         )
+
+    return document
+
+@router.post("/{document_id}/approve", response_model=DocumentResponse)
+def approve_document(
+    document_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role not in {
+        UserRole.ADMIN,
+        UserRole.MANAGER,
+    }:
+        raise HTTPException(
+            status_code=403,
+            detail="Only managers and admins can approve documents.",
+        )
+
+    document = get_document_by_id(
+        db=db,
+        document_id=document_id,
+        user_id=current_user.id,
+    )
+
+    if not document:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found.",
+        )
+
+    if document.status != DocumentStatus.PENDING_REVIEW:
+        raise HTTPException(
+            status_code=400,
+            detail="Only documents pending review can be approved.",
+        )
+
+    document.status = DocumentStatus.APPROVED
+
+    db.commit()
+    db.refresh(document)
+
+    return document
+
+
+@router.post("/{document_id}/reject", response_model=DocumentResponse)
+def reject_document(
+    document_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role not in {
+        UserRole.ADMIN,
+        UserRole.MANAGER,
+    }:
+        raise HTTPException(
+            status_code=403,
+            detail="Only managers and admins can reject documents.",
+        )
+
+    document = get_document_by_id(
+        db=db,
+        document_id=document_id,
+        user_id=current_user.id,
+    )
+
+    if not document:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found.",
+        )
+
+    if document.status != DocumentStatus.PENDING_REVIEW:
+        raise HTTPException(
+            status_code=400,
+            detail="Only documents pending review can be rejected.",
+        )
+
+    document.status = DocumentStatus.REJECTED
+
+    db.commit()
+    db.refresh(document)
 
     return document

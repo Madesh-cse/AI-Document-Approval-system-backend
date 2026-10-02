@@ -13,6 +13,13 @@ class DocumentResponse(BaseModel):
     file_size: int
     storage_path: str
     status: DocumentStatus
+    document_category: str | None = None
+    classification_confidence: str | None = None
+    classification_reason: str | None = None
+    extracted_data: dict | None = None
+    guardrail_passed: bool | None = None
+    guardrail_errors: list[str] | None = None
+    processing_error: str | None = None
     uploaded_by: int
     created_at: datetime
     updated_at: datetime
