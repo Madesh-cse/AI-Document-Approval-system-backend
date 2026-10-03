@@ -426,6 +426,33 @@ def approve_document(
 
     return document
 
+@router.get("/review/approved", response_model=DocumentListResponse)
+def get_approved_documents(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    query = (
+        db.query(Document)
+        .filter(Document.status == DocumentStatus.APPROVED)
+    )
+
+    # Employee → only their own approved documents
+    if current_user.role == UserRole.EMPLOYEE:
+        query = query.filter(
+            Document.uploaded_by == current_user.id
+        )
+
+    # Manager/Admin → all approved documents
+    documents = (
+        query
+        .order_by(Document.created_at.desc())
+        .all()
+    )
+
+    return DocumentListResponse(
+        documents=documents,
+        total=len(documents),
+    )
 
 @router.post("/{document_id}/reject", response_model=DocumentResponse)
 def reject_document(
