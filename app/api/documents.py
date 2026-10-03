@@ -11,11 +11,12 @@ from fastapi import (
     status,
 )
 from sqlalchemy.orm import Session
+from fastapi.responses import FileResponse
 
 from app.api.dependencies import get_current_user
 from app.db.session import get_db
 from app.models.user import User, UserRole
-from app.models.documents import DocumentStatus
+from app.models.documents import Document, DocumentStatus
 from app.schemas.document import (
     DocumentListResponse,
     DocumentProcessingResponse,
@@ -256,24 +257,133 @@ def document_question_answer(
     )
 
 
+@router.get("/review/pending", response_model=DocumentListResponse)
+def get_pending_review_documents(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role not in {
+        UserRole.ADMIN,
+        UserRole.MANAGER,
+    }:
+        raise HTTPException(
+            status_code=403,
+            detail="Only managers and admins can view pending documents.",
+        )
+
+    documents = (
+        db.query(Document)
+        .filter(
+            Document.status == DocumentStatus.PENDING_REVIEW
+        )
+        .order_by(Document.created_at.desc())
+        .all()
+    )
+
+    return DocumentListResponse(
+        documents=documents,
+        total=len(documents),
+    )
+
+
+@router.get("/{document_id}/file")
+def get_document_file(
+    document_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    query = db.query(Document).filter(
+        Document.id == document_id
+    )
+
+    if current_user.role not in {
+        UserRole.MANAGER,
+        UserRole.ADMIN,
+    }:
+        query = query.filter(
+            Document.uploaded_by == current_user.id
+        )
+
+    document = query.first()
+
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found.",
+        )
+
+    file_path = Path(document.storage_path)
+
+    if not file_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document file not found.",
+        )
+
+    if document.file_type != "application/pdf":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only PDF documents can be previewed.",
+        )
+
+    return FileResponse(
+        path=file_path,
+        media_type="application/pdf",
+        filename=document.file_name,
+        content_disposition_type="inline",
+    )
+
 @router.get(
-    "/{document_id}",
-    response_model=DocumentResponse,
+    "/review/all",
+    response_model=DocumentListResponse,
 )
+def get_all_review_documents(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role not in {
+        UserRole.ADMIN,
+        UserRole.MANAGER,
+    }:
+        raise HTTPException(
+            status_code=403,
+            detail="Only managers and admins can view all documents.",
+        )
+
+    documents = (
+        db.query(Document)
+        .order_by(Document.created_at.desc())
+        .all()
+    )
+
+    return DocumentListResponse(
+        documents=documents,
+        total=len(documents),
+    )
+
+@router.get("/{document_id}", response_model=DocumentResponse)
 def get_document(
     document_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    document = get_document_by_id(
-        db=db,
-        document_id=document_id,
-        user_id=current_user.id,
+    query = db.query(Document).filter(
+        Document.id == document_id
     )
+
+    if current_user.role not in {
+        UserRole.MANAGER,
+        UserRole.ADMIN,
+    }:
+        query = query.filter(
+            Document.uploaded_by == current_user.id
+        )
+
+    document = query.first()
 
     if not document:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
+            status_code=404,
             detail="Document not found.",
         )
 
@@ -294,22 +404,19 @@ def approve_document(
             detail="Only managers and admins can approve documents.",
         )
 
-    document = get_document_by_id(
-        db=db,
-        document_id=document_id,
-        user_id=current_user.id,
+    document = (
+        db.query(Document)
+        .filter(
+            Document.id == document_id,
+            Document.status == DocumentStatus.PENDING_REVIEW,
+        )
+        .first()
     )
 
     if not document:
         raise HTTPException(
             status_code=404,
-            detail="Document not found.",
-        )
-
-    if document.status != DocumentStatus.PENDING_REVIEW:
-        raise HTTPException(
-            status_code=400,
-            detail="Only documents pending review can be approved.",
+            detail="Document not found or is not pending review.",
         )
 
     document.status = DocumentStatus.APPROVED
@@ -335,22 +442,19 @@ def reject_document(
             detail="Only managers and admins can reject documents.",
         )
 
-    document = get_document_by_id(
-        db=db,
-        document_id=document_id,
-        user_id=current_user.id,
+    document = (
+        db.query(Document)
+        .filter(
+            Document.id == document_id,
+            Document.status == DocumentStatus.PENDING_REVIEW,
+        )
+        .first()
     )
 
     if not document:
         raise HTTPException(
             status_code=404,
-            detail="Document not found.",
-        )
-
-    if document.status != DocumentStatus.PENDING_REVIEW:
-        raise HTTPException(
-            status_code=400,
-            detail="Only documents pending review can be rejected.",
+            detail="Document not found or is not pending review.",
         )
 
     document.status = DocumentStatus.REJECTED
