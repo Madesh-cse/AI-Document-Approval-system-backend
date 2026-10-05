@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.auth import router as auth_router
 from app.api.documents import router as documents_router
 from app.api.dashboard import router as dashboard_router
+from app.api import audit_logs
 
 
 app = FastAPI(
@@ -25,10 +26,8 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(documents_router)
-app.include_router(
-    dashboard_router,
-    prefix="/api/v1",
-)
+app.include_router(dashboard_router,prefix="/api/v1",)
+app.include_router(audit_logs.router)
 
 
 @app.get("/")
