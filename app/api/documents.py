@@ -1,4 +1,6 @@
 from pathlib import Path
+from urllib import request
+from urllib import request
 from uuid import uuid4
 
 from fastapi import (
@@ -17,6 +19,8 @@ from app.api.dependencies import get_current_user
 from app.db.session import get_db
 from app.models.user import User, UserRole
 from app.models.documents import Document, DocumentStatus
+from app.models.audit_log import AuditAction, AuditStatus
+
 from app.schemas.document import (
     DocumentListResponse,
     DocumentProcessingResponse,
@@ -24,16 +28,12 @@ from app.schemas.document import (
     DocumentQARequest,
     DocumentQAResponse,
 )
-from app.services.rag_service import answer_question
-from app.services.document_service import (
-    create_document,
-    get_document_by_id,
-    get_user_documents,
-)
+from app.schemas.rejection import DocumentRejectionRequest
 
-from app.services.document_processing import (
-    process_document,
-)
+from app.services.rag_service import answer_question
+from app.services.document_service import ( create_document,get_document_by_id,get_user_documents,)
+from app.services.document_processing import (process_document,)
+from app.services.audit_service import create_audit_log
 
 
 router = APIRouter(
@@ -114,6 +114,13 @@ async def upload_document(
         storage_path=str(file_path),
         uploaded_by=current_user.id,
     )
+    create_audit_log(
+     db=db,
+     action=AuditAction.UPLOADED_DOCUMENT,
+     status=AuditStatus.SUCCESS,
+     user_id=current_user.id,
+     document_id=document.id,
+   )
 
     return document
 
@@ -162,11 +169,24 @@ def process_document_endpoint(
     document.processing_error = None
     db.commit()
     db.refresh(document)
+    # This is for AI system operation
+    create_audit_log(
+      db=db,
+      action=AuditAction.PROCESSING_STARTED,
+      status=AuditStatus.SUCCESS,
+      document_id=document.id,
+    )
 
     try:
         result = process_document(
             file_path=document.storage_path,
             document_id=document.id,
+        )
+        create_audit_log(
+          db=db,
+          action=AuditAction.DOCUMENT_CLASSIFIED,
+          status=AuditStatus.SUCCESS,
+          document_id=document.id,
         )
 
         document.document_category = result["category"]
@@ -177,13 +197,34 @@ def process_document_endpoint(
 
         if result["extraction"]:
             document.extracted_data = result["extraction"].model_dump()
+            create_audit_log(
+              db=db,
+              action=AuditAction.DATA_EXTRACTED,
+              status=AuditStatus.SUCCESS,
+              document_id=document.id,
+            )
         else:
             document.extracted_data = None
+        
+        if not result["guardrail_passed"]:
+            document.status = DocumentStatus.REJECTED
+            create_audit_log(
+                db=db,
+                action=AuditAction.GUARDRAIL_FAILED,
+                status=AuditStatus.FAILED,
+                document_id=document.id,
+            )
 
-        if not result["indexed"]:
+        elif not result["indexed"]:
             document.status = DocumentStatus.REJECTED
         else:
             document.status = DocumentStatus.PENDING_REVIEW
+            create_audit_log(
+              db=db,
+              action=AuditAction.SENT_FOR_REVIEW, 
+              status=AuditStatus.SUCCESS,
+              document_id=document.id,
+            )
 
         db.commit()
         db.refresh(document)
@@ -245,16 +286,44 @@ def document_question_answer(
             detail="Question cannot be empty.",
         )
 
-    result = answer_question(
-        question=request.question,
-        document_id=document_id,
-        conversation=request.conversation,
-    )
+    try:
+        result = answer_question(
+            question=request.question,
+            document_id=document_id,
+            conversation=request.conversation,
+        )
 
-    return DocumentQAResponse(
-        answer=result["answer"],
-        sources=result["sources"],
-    )
+        create_audit_log(
+            db=db,
+            action=AuditAction.DOCUMENT_QA,
+            status=AuditStatus.SUCCESS,
+            user_id=current_user.id,
+            document_id=document.id,
+        )
+
+        db.commit()
+
+        return DocumentQAResponse(
+            answer=result["answer"],
+            sources=result["sources"],
+        )
+
+    except Exception as exc:
+        create_audit_log(
+            db=db,
+            action=AuditAction.DOCUMENT_QA,
+            status=AuditStatus.FAILED,
+            user_id=current_user.id,
+            document_id=document.id,
+            error_message=str(exc),
+        )
+
+        db.commit()
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to answer the document question.",
+        )
 
 
 @router.get("/review/pending", response_model=DocumentListResponse)
@@ -420,6 +489,14 @@ def approve_document(
         )
 
     document.status = DocumentStatus.APPROVED
+    create_audit_log(
+       db=db,
+       action=AuditAction.APPROVED_DOCUMENT,
+       status=AuditStatus.SUCCESS,
+       user_id=current_user.id,
+       document_id=document.id,
+    )
+
 
     db.commit()
     db.refresh(document)
@@ -454,9 +531,37 @@ def get_approved_documents(
         total=len(documents),
     )
 
+@router.get("/review/rejected", response_model=DocumentListResponse)
+def get_rejected_documents(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    query = (
+        db.query(Document)
+        .filter(Document.status == DocumentStatus.REJECTED)
+    )
+
+    if current_user.role == UserRole.EMPLOYEE:
+        query = query.filter(
+            Document.uploaded_by == current_user.id
+        )
+
+    documents = (
+        query
+        .order_by(Document.created_at.desc())
+        .all()
+    )
+
+    return DocumentListResponse(
+        documents=documents,
+        total=len(documents),
+    )
+    
+
 @router.post("/{document_id}/reject", response_model=DocumentResponse)
 def reject_document(
     document_id: int,
+    rejection: DocumentRejectionRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -467,6 +572,14 @@ def reject_document(
         raise HTTPException(
             status_code=403,
             detail="Only managers and admins can reject documents.",
+        )
+
+    reason = rejection.reason.strip()
+
+    if not reason:
+        raise HTTPException(
+            status_code=400,
+            detail="Rejection reason is required.",
         )
 
     document = (
@@ -483,10 +596,17 @@ def reject_document(
             status_code=404,
             detail="Document not found or is not pending review.",
         )
-
+    
     document.status = DocumentStatus.REJECTED
-
+    document.rejection_reason = request.reason.strip()
     db.commit()
     db.refresh(document)
 
+    create_audit_log(
+       db=db,
+       action=AuditAction.REJECTED_DOCUMENT,
+       status=AuditStatus.SUCCESS,
+       user_id=current_user.id,
+       document_id=document.id,
+    )
     return document
