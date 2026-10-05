@@ -20,6 +20,7 @@ class DocumentResponse(BaseModel):
     guardrail_passed: bool | None = None
     guardrail_errors: list[str] | None = None
     processing_error: str | None = None
+    rejection_reason: str | None = None
     uploaded_by: int
     created_at: datetime
     updated_at: datetime

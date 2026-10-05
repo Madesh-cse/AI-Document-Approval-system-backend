@@ -87,6 +87,11 @@ class Document(Base):
         String(2000),
         nullable=True,
     )
+    
+    rejection_reason: Mapped[str | None] = mapped_column(
+      String(2000),
+      nullable=True,
+    )
 
     uploaded_by: Mapped[int] = mapped_column(
         ForeignKey("users.id"),
