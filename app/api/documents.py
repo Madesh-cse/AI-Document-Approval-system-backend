@@ -2,6 +2,7 @@ from pathlib import Path
 from urllib import request
 from urllib import request
 from uuid import uuid4
+from datetime import datetime
 
 from fastapi import (
     APIRouter,
@@ -32,7 +33,8 @@ from app.schemas.rejection import DocumentRejectionRequest
 
 from app.services.rag_service import answer_question
 from app.services.document_service import ( create_document,get_document_by_id,get_user_documents,)
-from app.services.document_processing import (process_document,)
+# from app.services.document_processing import (process_document,)
+from app.services.document_graph import document_graph
 from app.services.audit_service import create_audit_log
 
 
@@ -148,7 +150,7 @@ def list_documents(
     "/{document_id}/process",
     response_model=DocumentProcessingResponse,
 )
-def process_document_endpoint(
+async def process_document_endpoint(
     document_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -161,88 +163,234 @@ def process_document_endpoint(
 
     if not document:
         raise HTTPException(
-            status_code=404,
-            detail="Document not found",
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found.",
         )
 
     document.status = DocumentStatus.PROCESSING
     document.processing_error = None
+
     db.commit()
     db.refresh(document)
-    # This is for AI system operation
+
     create_audit_log(
-      db=db,
-      action=AuditAction.PROCESSING_STARTED,
-      status=AuditStatus.SUCCESS,
-      document_id=document.id,
+        db=db,
+        action=AuditAction.PROCESSING_STARTED,
+        status=AuditStatus.SUCCESS,
+        user_id=current_user.id,
+        document_id=document.id,
     )
 
+    db.commit()
+
+    initial_state = {
+        "document_id": document.id,
+        "file_path": document.storage_path,
+        "documents": [],
+        "document_text": "",
+        "category": None,
+        "classification_confidence": None,
+        "classification_reason": None,
+        "extraction": None,
+        "guardrail_passed": False,
+        "guardrail_errors": [],
+        "chunks": [],
+        "indexed": False,
+        "status": "started",
+        "error": None,
+        "classification_retries": 0,
+        "extraction_retries": 0,
+        "max_retries": 2,
+        "approval_status": None,
+        "approval_reason": None,
+        "reviewed_by": None,
+        "approval_deadline": None,
+        "calendar_event_id": None,
+        "calendar_event_created": False,
+    }
+
     try:
-        result = process_document(
-            file_path=document.storage_path,
-            document_id=document.id,
-        )
-        create_audit_log(
-          db=db,
-          action=AuditAction.DOCUMENT_CLASSIFIED,
-          status=AuditStatus.SUCCESS,
-          document_id=document.id,
+        result = await document_graph.ainvoke(
+            initial_state,
+            config={
+                "configurable": {
+                    "thread_id": f"document-{document.id}",
+                }
+            },
         )
 
-        document.document_category = result["category"]
-        document.classification_confidence = result["confidence"]
-        document.classification_reason = result["reason"]
-        document.guardrail_passed = result["guardrail_passed"]
-        document.guardrail_errors = result["guardrail_errors"]
+        document.document_category = result.get("category")
 
-        if result["extraction"]:
-            document.extracted_data = result["extraction"].model_dump()
+        document.classification_confidence = result.get(
+            "classification_confidence"
+        )
+
+        document.classification_reason = result.get(
+            "classification_reason"
+        )
+
+        document.guardrail_passed = result.get(
+            "guardrail_passed"
+        )
+
+        document.guardrail_errors = result.get(
+            "guardrail_errors",
+            [],
+        )
+
+        extraction = result.get("extraction")
+
+        if extraction:
+            if hasattr(extraction, "model_dump"):
+                document.extracted_data = extraction.model_dump()
+            else:
+                document.extracted_data = extraction
+
             create_audit_log(
-              db=db,
-              action=AuditAction.DATA_EXTRACTED,
-              status=AuditStatus.SUCCESS,
-              document_id=document.id,
+                db=db,
+                action=AuditAction.DATA_EXTRACTED,
+                status=AuditStatus.SUCCESS,
+                user_id=current_user.id,
+                document_id=document.id,
             )
         else:
             document.extracted_data = None
-        
-        if not result["guardrail_passed"]:
+
+        create_audit_log(
+            db=db,
+            action=AuditAction.DOCUMENT_CLASSIFIED,
+            status=AuditStatus.SUCCESS,
+            user_id=current_user.id,
+            document_id=document.id,
+        )
+
+        calendar_event_id = result.get(
+            "calendar_event_id"
+        )
+
+        calendar_event_created = result.get(
+            "calendar_event_created",
+            False,
+        )
+
+        approval_deadline = result.get(
+            "approval_deadline"
+        )
+
+        document.calendar_event_id = calendar_event_id
+
+        document.calendar_event_created = (
+            calendar_event_created
+        )
+
+        if approval_deadline:
+            if isinstance(approval_deadline, datetime):
+                document.approval_deadline = approval_deadline
+            else:
+                document.approval_deadline = (
+                    datetime.fromisoformat(
+                        approval_deadline
+                    )
+                )
+        else:
+            document.approval_deadline = None
+
+        guardrail_passed = result.get(
+            "guardrail_passed",
+            False,
+        )
+
+        approval_status = result.get(
+            "approval_status"
+        )
+
+        if not guardrail_passed:
             document.status = DocumentStatus.REJECTED
+
             create_audit_log(
                 db=db,
-                action=AuditAction.GUARDRAIL_FAILED,
+                action=AuditAction.VALIDATION_FAILED,
                 status=AuditStatus.FAILED,
+                user_id=current_user.id,
+                document_id=document.id,
+                error_message=str(
+                    result.get("guardrail_errors", [])
+                ),
+            )
+
+        elif approval_status == "rejected":
+            document.status = DocumentStatus.REJECTED
+
+            create_audit_log(
+                db=db,
+                action=AuditAction.REJECTED_DOCUMENT,
+                status=AuditStatus.SUCCESS,
+                user_id=current_user.id,
                 document_id=document.id,
             )
 
-        elif not result["indexed"]:
-            document.status = DocumentStatus.REJECTED
+        elif approval_status == "approved":
+            document.status = DocumentStatus.APPROVED
+
+            create_audit_log(
+                db=db,
+                action=AuditAction.APPROVED_DOCUMENT,
+                status=AuditStatus.SUCCESS,
+                user_id=current_user.id,
+                document_id=document.id,
+            )
+
         else:
             document.status = DocumentStatus.PENDING_REVIEW
+
             create_audit_log(
-              db=db,
-              action=AuditAction.SENT_FOR_REVIEW, 
-              status=AuditStatus.SUCCESS,
-              document_id=document.id,
+                db=db,
+                action=AuditAction.SENT_FOR_REVIEW,
+                status=AuditStatus.SUCCESS,
+                user_id=current_user.id,
+                document_id=document.id,
             )
 
         db.commit()
         db.refresh(document)
 
+        if hasattr(extraction, "model_dump"):
+            extraction_response = extraction.model_dump()
+        else:
+            extraction_response = extraction
+
         return DocumentProcessingResponse(
             document_id=document.id,
             status=document.status,
-            category=result["category"],
-            confidence=result["confidence"],
-            reason=result["reason"],
-            extraction=(
-                result["extraction"].model_dump()
-                if result["extraction"]
-                else None
+            category=result.get("category"),
+            confidence=result.get(
+                "classification_confidence"
             ),
-            guardrail_passed=result["guardrail_passed"],
-            guardrail_errors=result["guardrail_errors"],
-            indexed=result["indexed"],
+            reason=result.get(
+                "classification_reason"
+            ),
+            extraction=extraction_response,
+            guardrail_passed=result.get(
+                "guardrail_passed"
+            ),
+            guardrail_errors=result.get(
+                "guardrail_errors",
+                [],
+            ),
+            indexed=result.get(
+                "indexed",
+                False,
+            ),
+            calendar_event_id=result.get(
+                "calendar_event_id"
+            ),
+            calendar_event_created=result.get(
+                "calendar_event_created",
+                False,
+            ),
+            approval_deadline=result.get(
+                "approval_deadline"
+            ),
         )
 
     except Exception as error:
@@ -253,10 +401,9 @@ def process_document_endpoint(
         db.refresh(document)
 
         raise HTTPException(
-            status_code=500,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Document processing failed: {error}",
         )
-
 
 @router.post(
     "/{document_id}/qa",

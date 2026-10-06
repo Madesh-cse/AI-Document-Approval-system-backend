@@ -92,6 +92,21 @@ class Document(Base):
       String(2000),
       nullable=True,
     )
+    
+    approval_deadline: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+    )
+
+    calendar_event_id: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+
+    calendar_event_created: Mapped[bool] = mapped_column(
+        default=False,
+        nullable=False,
+    )
 
     uploaded_by: Mapped[int] = mapped_column(
         ForeignKey("users.id"),
