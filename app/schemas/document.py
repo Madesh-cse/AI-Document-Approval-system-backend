@@ -21,6 +21,9 @@ class DocumentResponse(BaseModel):
     guardrail_errors: list[str] | None = None
     processing_error: str | None = None
     rejection_reason: str | None = None
+    approval_deadline: datetime | None = None
+    calendar_event_id: str | None = None
+    calendar_event_created: bool = False
     uploaded_by: int
     created_at: datetime
     updated_at: datetime
@@ -45,6 +48,9 @@ class DocumentProcessingResponse(BaseModel):
     guardrail_passed: bool
     guardrail_errors: list[str] = []
     indexed: bool
+    approval_deadline: datetime | None = None
+    calendar_event_id: str | None = None
+    calendar_event_created: bool = False
 
 
 class DocumentQARequest(BaseModel):
