@@ -1,4 +1,5 @@
-from typing import TypedDict
+from typing import Any, TypedDict
+from datetime import datetime, timedelta
 
 from langchain_core.documents import Document
 from langgraph.checkpoint.memory import MemorySaver
@@ -12,38 +13,33 @@ from app.services.document_extraction import extract_document_data
 from app.services.document_loader import load_document
 from app.services.extraction_guardrails import validate_extraction
 from app.services.vector_store import get_vector_store
+from app.services.mcp_calendar_client import (create_calendar_event)
 
 
 class DocumentProcessingState(TypedDict):
     document_id: int
     file_path: str
-
     documents: list
     document_text: str
-
     category: str | None
     classification_confidence: str | None
     classification_reason: str | None
-
-    extraction: dict | None
-
+    extraction: Any
     guardrail_passed: bool
     guardrail_errors: list[str]
-
     chunks: list[dict]
-
     indexed: bool
-
     status: str
     error: str | None
-
     classification_retries: int
     extraction_retries: int
     max_retries: int
-
     approval_status: str | None
     approval_reason: str | None
     reviewed_by: int | None
+    approval_deadline: str | None
+    calendar_event_id: str | None
+    calendar_event_created: bool
 
 
 def load_document_node(
@@ -185,7 +181,7 @@ def extract_document_node(
         )
 
         return {
-            "extraction": extraction.model_dump(),
+            "extraction": extraction,
             "status": "extracted",
             "error": None,
         }
@@ -195,7 +191,6 @@ def extract_document_node(
             "status": "extraction_failed",
             "error": str(exc),
         }
-
 
 def retry_extraction_node(
     state: DocumentProcessingState,
@@ -421,6 +416,61 @@ def failed_document_node(
         "indexed": False,
     }
 
+async def schedule_review_node(
+    state: DocumentProcessingState,
+):
+    try:
+        deadline = (
+            datetime.now().astimezone()
+            + timedelta(days=2)
+        )
+
+        start_time = deadline.isoformat()
+
+        end_time = (
+            deadline + timedelta(minutes=30)
+        ).isoformat()
+
+        result = await create_calendar_event(
+            title=(
+                f"Document Approval Deadline - "
+                f"{state['category']} "
+                f"#{state['document_id']}"
+            ),
+            description=(
+                "Manager approval required for "
+                f"document {state['document_id']}."
+            ),
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+        event_id = (
+            result.split("Event ID:")[-1]
+            .strip()
+        )
+
+        if not event_id:
+            raise RuntimeError(
+                "Calendar event ID was not returned."
+            )
+
+        return {
+            "approval_deadline": start_time,
+            "calendar_event_id": event_id,
+            "calendar_event_created": True,
+            "status": "review_scheduled",
+            "error": None,
+        }
+
+    except Exception as exc:
+        return {
+            "approval_deadline": None,
+            "calendar_event_id": None,
+            "calendar_event_created": False,
+            "status": "calendar_failed",
+            "error": str(exc),
+        }
 
 graph = StateGraph(
     DocumentProcessingState
@@ -492,6 +542,11 @@ graph.add_node(
     failed_document_node,
 )
 
+graph.add_node(
+    "schedule_review",
+    schedule_review_node,
+)
+
 
 graph.add_edge(
     START,
@@ -561,9 +616,13 @@ graph.add_edge(
 
 graph.add_edge(
     "index",
-    "human_review",
+    "schedule_review",
 )
 
+graph.add_edge(
+    "schedule_review",
+    "human_review",
+)
 
 graph.add_conditional_edges(
     "human_review",

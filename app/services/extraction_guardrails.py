@@ -10,23 +10,30 @@ def validate_extraction(
 
     source_text = document_text.lower()
 
-    if not extraction.document_type.strip():
+    if isinstance(extraction, dict):
+        document_type = extraction.get("document_type")
+        summary = extraction.get("summary")
+    else:
+        document_type = extraction.document_type
+        summary = extraction.summary
+
+    if not isinstance(document_type, str) or not document_type.strip():
         errors.append(
             "document_type cannot be empty."
         )
 
-    if not extraction.summary.strip():
+    if not isinstance(summary, str) or not summary.strip():
         errors.append(
             "summary cannot be empty."
         )
 
-    if len(extraction.summary) > 1000:
+    if isinstance(summary, str) and len(summary) > 1000:
         errors.append(
             "summary cannot exceed 1000 characters."
         )
 
-    if isinstance(extraction.summary, str):
-        if extraction.summary.lower() not in source_text:
+    if isinstance(summary, str):
+        if summary.lower() not in source_text:
             pass
 
     _validate_common_fields(
