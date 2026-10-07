@@ -1,6 +1,7 @@
 import io
 
 import boto3
+from botocore.exceptions import BotoCoreError, ClientError
 
 from app.core.config import settings
 
@@ -18,14 +19,20 @@ def upload_file_to_s3(
     object_key: str,
     content_type: str,
 ):
-    s3_client.put_object(
-        Bucket=settings.AWS_S3_BUCKET_NAME,
-        Key=object_key,
-        Body=file_content,
-        ContentType=content_type,
-    )
+    try:
+        s3_client.put_object(
+            Bucket=settings.AWS_S3_BUCKET_NAME,
+            Key=object_key,
+            Body=file_content,
+            ContentType=content_type,
+        )
 
-    return object_key
+        return object_key
+
+    except (ClientError, BotoCoreError) as exc:
+        raise RuntimeError(
+            "Failed to upload document to S3."
+        ) from exc
 
 
 def download_file_from_s3(
@@ -33,35 +40,53 @@ def download_file_from_s3(
 ) -> bytes:
     buffer = io.BytesIO()
 
-    s3_client.download_fileobj(
-        settings.AWS_S3_BUCKET_NAME,
-        object_key,
-        buffer,
-    )
+    try:
+        s3_client.download_fileobj(
+            settings.AWS_S3_BUCKET_NAME,
+            object_key,
+            buffer,
+        )
 
-    buffer.seek(0)
+        buffer.seek(0)
 
-    return buffer.read()
+        return buffer.read()
+
+    except (ClientError, BotoCoreError) as exc:
+        raise RuntimeError(
+            "Failed to download document from S3."
+        ) from exc
 
 
 def delete_file_from_s3(
     object_key: str,
 ):
-    s3_client.delete_object(
-        Bucket=settings.AWS_S3_BUCKET_NAME,
-        Key=object_key,
-    )
+    try:
+        s3_client.delete_object(
+            Bucket=settings.AWS_S3_BUCKET_NAME,
+            Key=object_key,
+        )
+
+    except (ClientError, BotoCoreError) as exc:
+        raise RuntimeError(
+            "Failed to delete document from S3."
+        ) from exc
 
 
 def generate_presigned_url(
     object_key: str,
     expiration: int = 300,
 ):
-    return s3_client.generate_presigned_url(
-        "get_object",
-        Params={
-            "Bucket": settings.AWS_S3_BUCKET_NAME,
-            "Key": object_key,
-        },
-        ExpiresIn=expiration,
-    )
+    try:
+        return s3_client.generate_presigned_url(
+            "get_object",
+            Params={
+                "Bucket": settings.AWS_S3_BUCKET_NAME,
+                "Key": object_key,
+            },
+            ExpiresIn=expiration,
+        )
+
+    except (ClientError, BotoCoreError) as exc:
+        raise RuntimeError(
+            "Failed to generate document access URL."
+        ) from exc

@@ -36,7 +36,7 @@ from app.services.document_service import ( create_document,get_document_by_id,g
 # from app.services.document_processing import (process_document,)
 from app.services.document_graph import document_graph
 from app.services.audit_service import create_audit_log
-from app.services.s3_service import upload_file_to_s3
+from app.services.s3_service import delete_file_from_s3, upload_file_to_s3
 
 
 router = APIRouter(
@@ -86,42 +86,67 @@ async def upload_document(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="File name is required.",
         )
-    
+
     file_extension = Path(file.filename).suffix.lower()
     stored_file_name = f"{uuid4().hex}{file_extension}"
 
-    s3_key = f"documents/{current_user.id}/{stored_file_name}"
-
-    upload_file_to_s3(
-      file_content=file_content,
-      object_key=s3_key,
-      content_type=file.content_type,
+    s3_key = (
+        f"documents/{current_user.id}/{stored_file_name}"
     )
 
-    document_title = (
-        title.strip()
-        if title and title.strip()
-        else Path(file.filename).stem
-    )
+    s3_uploaded = False
 
-    document = create_document(
-        db=db,
-        title=document_title,
-        file_name=file.filename,
-        file_type=file.content_type,
-        file_size=len(file_content),
-        storage_path=s3_key,
-        uploaded_by=current_user.id,
-    )
-    create_audit_log(
-     db=db,
-     action=AuditAction.UPLOADED_DOCUMENT,
-     status=AuditStatus.SUCCESS,
-     user_id=current_user.id,
-     document_id=document.id,
-   )
+    try:
+        upload_file_to_s3(
+            file_content=file_content,
+            object_key=s3_key,
+            content_type=file.content_type,
+        )
 
-    return document
+        s3_uploaded = True
+
+        document_title = (
+            title.strip()
+            if title and title.strip()
+            else Path(file.filename).stem
+        )
+
+        document = create_document(
+            db=db,
+            title=document_title,
+            file_name=file.filename,
+            file_type=file.content_type,
+            file_size=len(file_content),
+            storage_path=s3_key,
+            uploaded_by=current_user.id,
+        )
+
+        create_audit_log(
+            db=db,
+            action=AuditAction.UPLOADED_DOCUMENT,
+            status=AuditStatus.SUCCESS,
+            user_id=current_user.id,
+            document_id=document.id,
+        )
+
+        db.commit()
+        db.refresh(document)
+
+        return document
+
+    except Exception as exc:
+        db.rollback()
+
+        if s3_uploaded:
+            try:
+                delete_file_from_s3(s3_key)
+            except Exception:
+                pass
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to upload document.",
+        ) from exc
 
 
 @router.get(
