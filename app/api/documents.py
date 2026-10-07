@@ -36,6 +36,7 @@ from app.services.document_service import ( create_document,get_document_by_id,g
 # from app.services.document_processing import (process_document,)
 from app.services.document_graph import document_graph
 from app.services.audit_service import create_audit_log
+from app.services.s3_service import upload_file_to_s3
 
 
 router = APIRouter(
@@ -43,8 +44,6 @@ router = APIRouter(
     tags=["Documents"],
 )
 
-
-UPLOAD_DIR = Path("uploads")
 
 
 ALLOWED_FILE_TYPES = {
@@ -87,19 +86,17 @@ async def upload_document(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="File name is required.",
         )
-
-    user_upload_dir = UPLOAD_DIR / str(current_user.id)
-    user_upload_dir.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
+    
     file_extension = Path(file.filename).suffix.lower()
     stored_file_name = f"{uuid4().hex}{file_extension}"
 
-    file_path = user_upload_dir / stored_file_name
+    s3_key = f"documents/{current_user.id}/{stored_file_name}"
 
-    file_path.write_bytes(file_content)
+    upload_file_to_s3(
+      file_content=file_content,
+      object_key=s3_key,
+      content_type=file.content_type,
+    )
 
     document_title = (
         title.strip()
@@ -113,7 +110,7 @@ async def upload_document(
         file_name=file.filename,
         file_type=file.content_type,
         file_size=len(file_content),
-        storage_path=str(file_path),
+        storage_path=s3_key,
         uploaded_by=current_user.id,
     )
     create_audit_log(
