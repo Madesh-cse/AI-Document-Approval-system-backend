@@ -55,7 +55,6 @@ class DocumentProcessingResponse(BaseModel):
 
 class DocumentQARequest(BaseModel):
     question: str
-    conversation: list[dict] = []
 
 
 class DocumentQASource(BaseModel):

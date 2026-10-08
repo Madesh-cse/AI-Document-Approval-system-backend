@@ -29,6 +29,7 @@ from app.schemas.document import (
     DocumentQARequest,
     DocumentQAResponse,
 )
+from app.schemas.conversation import (ConversationHistoryResponse,ConversationMessageResponse,)
 from app.schemas.rejection import DocumentRejectionRequest
 
 from app.services.rag_service import answer_question
@@ -37,6 +38,7 @@ from app.services.document_service import ( create_document,get_document_by_id,g
 from app.services.document_graph import document_graph
 from app.services.audit_service import create_audit_log
 from app.services.s3_service import delete_file_from_s3, upload_file_to_s3
+from app.services.conversation_service import (add_message,get_messages,get_or_create_conversation,get_conversation,)
 
 
 router = APIRouter(
@@ -449,17 +451,52 @@ def document_question_answer(
             detail="Document not found.",
         )
 
-    if not request.question.strip():
+    question = request.question.strip()
+
+    if not question:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Question cannot be empty.",
         )
 
+    conversation = get_or_create_conversation(
+        db=db,
+        document_id=document_id,
+        user_id=current_user.id,
+    )
+
+    previous_messages = get_messages(
+        db=db,
+        conversation_id=conversation.id,
+    )
+
+    conversation_history = [
+        {
+            "role": message.role,
+            "content": message.content,
+        }
+        for message in previous_messages
+    ]
+
     try:
         result = answer_question(
-            question=request.question,
+            question=question,
             document_id=document_id,
-            conversation=request.conversation,
+            conversation=conversation_history,
+        )
+
+        add_message(
+            db=db,
+            conversation_id=conversation.id,
+            role="user",
+            content=question,
+        )
+
+        add_message(
+            db=db,
+            conversation_id=conversation.id,
+            role="assistant",
+            content=result["answer"],
         )
 
         create_audit_log(
@@ -478,6 +515,8 @@ def document_question_answer(
         )
 
     except Exception as exc:
+        db.rollback()
+
         create_audit_log(
             db=db,
             action=AuditAction.DOCUMENT_QA,
@@ -492,8 +531,55 @@ def document_question_answer(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to answer the document question.",
+        ) from exc
+
+@router.get(
+    "/{document_id}/qa/history",
+    response_model=ConversationHistoryResponse,
+)
+def get_document_qa_history(
+    document_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    document = get_document_by_id(
+        db=db,
+        document_id=document_id,
+        user_id=current_user.id,
+    )
+
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found.",
         )
 
+    conversation = get_conversation(
+        db=db,
+        document_id=document_id,
+        user_id=current_user.id,
+    )
+
+    if not conversation:
+        return ConversationHistoryResponse(
+            conversation_id=None,
+            document_id=document_id,
+            messages=[],
+        )
+
+    messages = get_messages(
+        db=db,
+        conversation_id=conversation.id,
+    )
+
+    return ConversationHistoryResponse(
+        conversation_id=conversation.id,
+        document_id=document_id,
+        messages=[
+            ConversationMessageResponse.model_validate(message)
+            for message in messages
+        ],
+    )
 
 @router.get("/review/pending", response_model=DocumentListResponse)
 def get_pending_review_documents(
