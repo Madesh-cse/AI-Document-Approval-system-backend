@@ -851,17 +851,19 @@ def reject_document(
             status_code=404,
             detail="Document not found or is not pending review.",
         )
-    
+
     document.status = DocumentStatus.REJECTED
-    document.rejection_reason = request.reason.strip()
+    document.rejection_reason = reason
+
     db.commit()
     db.refresh(document)
 
     create_audit_log(
-       db=db,
-       action=AuditAction.REJECTED_DOCUMENT,
-       status=AuditStatus.SUCCESS,
-       user_id=current_user.id,
-       document_id=document.id,
+        db=db,
+        action=AuditAction.REJECTED_DOCUMENT,
+        status=AuditStatus.SUCCESS,
+        user_id=current_user.id,
+        document_id=document.id,
     )
+
     return document
