@@ -31,7 +31,7 @@ LangGraph orchestrates document processing and approval stages, while PostgreSQL
 ![image alt](https://github.com/Madesh-cse/AI-Document-Approval-system-backend/blob/3b775f2eba014ff2d827e8a716fecd55e53b1473/dashboard_profile-image.png)
 ![image alt](https://github.com/Madesh-cse/AI-Document-Approval-system-backend/blob/d30d48801489089eb1ec8a8f3160873feb08faa3/documentlist-4.png)
 ![image alt](https://github.com/Madesh-cse/AI-Document-Approval-system-backend/blob/06eb9c3d8df96b197238caa131be7a25ee38e2b5/documentlist-6.png)
-![image alt](https://github.com/Madesh-cse/AI-Document-Approval-system-backend/blob/ef0a52b03a4e91a42b51b457b207e73f77f0eae0/documentlist-2.png)
+![image alt](https://github.com/Madesh-cse/AI-Document-Approval-system-backend/blob/4d4e55ecd6d5a94e0dc06976005873446008da39/documentlist-2.png)
 
 ### 4. Agentic Workflows with LangGraph
 - Orchestration of document processing stages.
